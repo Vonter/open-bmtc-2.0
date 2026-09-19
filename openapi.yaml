@@ -20,6 +20,10 @@ info:
 
     - A schema's `required` fields describe what the client expects to receive; the service
       may omit fields in error responses or in variants not yet seen in live traffic.
+    - No per-vehicle attributes are exposed: a live vehicle carries only `vNo`, position,
+      bearing, `eta` and halted state, and `/seat/availability` only a crowding level. The
+      route's service class (`spf`; see `BmtcServiceClass`) is the sole vehicle-type signal
+      and covers air-conditioning alone, so electric buses are indistinguishable from diesel.
     - Not affiliated with, endorsed by, or supported by BMTC or Chalo. For
       documentation and research purposes only.
   contact:
@@ -676,6 +680,98 @@ paths:
                           },
                         ],
                     }
+        default: { $ref: "#/components/responses/GenericError" }
+  "/scheduler_v4/v4/{city}/routes/id":
+    parameters:
+      - {
+          name: city,
+          in: path,
+          required: true,
+          schema: { type: string },
+          example: bengaluru,
+        }
+    get:
+      tags: ["Routes"]
+      operationId: get_scheduler_v4_v4_city_routes_id
+      summary: "Whole-network route directory"
+      description: |-
+        Every route in the city for one transit mode, each with its stop sequence, polyline and
+        service class. One call returns the whole network (9,058 direction entries and roughly 100 MB
+        for Bengaluru buses), making it the cheapest way to read `spf` for every route and far too
+        heavy to poll. Directions are separate entries sharing a `route_name`, and about 1% of names
+        carry a different `spf` per direction, usually `Ordinary` against `Ordinary Express`.
+      security: []
+      parameters:
+        - name: mode
+          in: query
+          required: true
+          description: "Transit mode to list."
+          schema: { type: string }
+          example: bus
+      responses:
+        "4XX": { $ref: "#/components/responses/GenericError" }
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                {
+                  oneOf:
+                    [
+                      {
+                        type: array,
+                        items:
+                          {
+                            $ref: "#/components/schemas/RouteDirectoryEntryApiModel",
+                          },
+                      },
+                      { type: "null" },
+                    ],
+                }
+              examples:
+                liveCapture:
+                  summary: Representative production response captured for Bengaluru on 19 September 2026
+                  value:
+                    [
+                      {
+                        direction: UP,
+                        route_id: 5Fl6gfg4,
+                        reverse_routeId: "",
+                        transport_type: bus,
+                        station_type: BUS,
+                        route_name: "305",
+                        agency_name: BMTC,
+                        internalName: KMT-NDV,
+                        spf: [Ordinary],
+                        owners: [app, etim],
+                        totalDistance: 27931,
+                        tt_type: 1,
+                        ttStatus: 0,
+                        ttSid: 0,
+                        ticketingAllowed: true,
+                        mTicketEnabled: true,
+                        isFreeRide: false,
+                        routePassEnabled: false,
+                        stopPassEnabled: false,
+                        isPremiumBusRoute: false,
+                        isAirportRoute: false,
+                        shortTripEnabled: false,
+                        stopSequenceWithDetails:
+                          [
+                            {
+                              stop_id: Afqg410p,
+                              stop_lat: 12.96437,
+                              stop_lon: 77.57736,
+                              stop_name: KR Market,
+                              short_id: 27795,
+                              transport_type: bus,
+                              station_type: BUS,
+                              city: BENGALURU,
+                              stateCode: KA,
+                            },
+                          ],
+                      },
+                    ]
         default: { $ref: "#/components/responses/GenericError" }
   "/scheduler_v4/v4/{city}/nearby/stops":
     parameters:
@@ -2914,6 +3010,8 @@ paths:
       description: |-
         Per-city metadata. Like `cityList`, the response is kept as raw JSON: the client reads the `data` and
         `cityList` members and stores them as strings.
+        `data[].modes_map[].agencies[].serviceCategories` maps each of an agency's `serviceCategory`
+        codes to the display name its routes carry in `spf`; see `BmtcServiceClass`.
       security: []
       parameters:
         - name: appVer
@@ -2947,6 +3045,60 @@ paths:
                             agency_map: { BUS: [{ agencyName: BMTC }] },
                             city: BENGALURU,
                             city_display_name: Bengaluru,
+                            modes_map:
+                              [
+                                {
+                                  agencies:
+                                    [
+                                      {
+                                        agencyName: BMTC,
+                                        serviceCategories:
+                                          {
+                                            OD:
+                                              {
+                                                displayName: Ordinary,
+                                                displayTags: [Ordinary],
+                                              },
+                                            EXP:
+                                              {
+                                                displayName: Ordinary Express,
+                                                displayTags: [Ordinary Express],
+                                              },
+                                            VJ:
+                                              {
+                                                displayName: Vajra,
+                                                displayTags: [Vajra],
+                                              },
+                                            VVJ:
+                                              {
+                                                displayName: Vayu Vajra,
+                                                displayTags: [Vayu Vajra],
+                                              },
+                                            DD:
+                                              {
+                                                displayName: Divya Darshana,
+                                                displayTags: [Divya Darshana],
+                                              },
+                                            "Ordinary Vistara":
+                                              {
+                                                displayName: Ordinary Vistara,
+                                                displayTags: [Ordinary Vistara],
+                                              },
+                                            "Express Vistara":
+                                              {
+                                                displayName: Express Vistara,
+                                                displayTags: [Express Vistara],
+                                              },
+                                            "Vajra Vistara":
+                                              {
+                                                displayName: Vajra Vistara,
+                                                displayTags: [Vajra Vistara],
+                                              },
+                                          },
+                                      },
+                                    ],
+                                },
+                              ],
                           },
                         ],
                       cityList:
@@ -3691,6 +3843,24 @@ paths:
       tags: ["Mobile Ticketing & Passes"]
       operationId: get_mticketing_v1_cities_city_agencies_agency_ticket_details
       summary: "Get mobile-ticket details between stops"
+      description: >-
+        Passenger fares for one ordered stop pair on a route, read by the mobile-ticket
+        purchase flow without a user token.
+      security: []
+      parameters:
+        - { name: routeId, in: query, required: true, schema: { type: string } }
+        - {
+            name: startStopId,
+            in: query,
+            required: true,
+            schema: { type: string },
+          }
+        - {
+            name: endStopId,
+            in: query,
+            required: true,
+            schema: { type: string },
+          }
       responses:
         "200":
           description: Success
@@ -7040,6 +7210,33 @@ components:
           type: [string, "null"]
       required: [status]
       type: object
+    BmtcServiceCategoryCode:
+      description: >-
+        `serviceCategory` code for a `BmtcServiceClass`: `OD` Ordinary, `EXP` Ordinary Express,
+        `VJ` Vajra, `VVJ` Vayu Vajra, `DD` Divya Darshana. The Vistara classes are keyed by their
+        display name.
+      enum:
+        [OD, EXP, VJ, VVJ, DD, Ordinary Vistara, Express Vistara, Vajra Vistara]
+      type: string
+    BmtcServiceClass:
+      description: >-
+        Service class a route runs, carried by `spf`, `specialFeature`, `specialFeatures` and
+        `special_features`, and as a code by `serviceCategory`. `Vajra`, `Vayu Vajra`, `Vajra
+        Vistara` and `Divya Darshana` are air-conditioned and the rest are not; `Vistara` names a
+        livery, not a temperature. Each agency publishes its own vocabulary under
+        `data[].modes_map[].agencies[].serviceCategories` in `/scheduler_v4/v1/{city}/metadataprops`.
+      enum:
+        [
+          Ordinary,
+          Ordinary Express,
+          Ordinary Vistara,
+          Express Vistara,
+          Vajra,
+          Vayu Vajra,
+          Vajra Vistara,
+          Divya Darshana,
+        ]
+      type: string
     BookingHistoryDataApiModel:
       properties:
         configuration: { description: Opaque JSON }
@@ -9155,7 +9352,7 @@ components:
             - { type: "null" }
         stagePricingLogic:
           type: [integer, "null"]
-      required: [fares, routeDetails, stagePricingLogic]
+      required: [fares, routeDetails]
       type: object
     MTicketFareRouteStageResponseApiModel:
       properties:
@@ -9835,18 +10032,21 @@ components:
         routeNamingScheme:
           type: [string, "null"]
         serviceCategory:
-          description: Service category returned by legacy BMTC routes.
-          type: [string, "null"]
+          description: Service class code; the display name is the route's `spf` value.
+          oneOf:
+            - { $ref: "#/components/schemas/BmtcServiceCategoryCode" }
+            - { type: "null" }
         specialFeature:
-          description: Also returned as `specialFeatures`.
-          items: { type: string }
+          description: Also returned as `specialFeatures`; see `BmtcServiceClass`.
+          items: { $ref: "#/components/schemas/BmtcServiceClass" }
           type: [array, "null"]
         specialFeatures:
-          description: Alternate wire name for `specialFeature`.
-          items: { type: string }
+          description: Alternate wire name for `specialFeature`; see `BmtcServiceClass`.
+          items: { $ref: "#/components/schemas/BmtcServiceClass" }
           type: [array, "null"]
         spf:
-          items: { type: string }
+          description: Service classes the route runs; see `BmtcServiceClass`.
+          items: { $ref: "#/components/schemas/BmtcServiceClass" }
           type: [array, "null"]
         toStop:
           oneOf:
@@ -11711,7 +11911,8 @@ components:
           items: { $ref: "#/components/schemas/RouteLegacySpecialFeature" }
           type: [array, "null"]
         spf:
-          items: { type: string }
+          description: Service classes the route runs; see `BmtcServiceClass`.
+          items: { $ref: "#/components/schemas/BmtcServiceClass" }
           type: [array, "null"]
         station_type:
           description: >-
@@ -11759,6 +11960,65 @@ components:
         frequency:
           type: [integer, "null"]
         start_time:
+          type: [integer, "null"]
+      type: object
+    RouteDirectoryEntryApiModel:
+      description: One direction of one route in the whole-network route directory.
+      properties:
+        agency_name:
+          type: [string, "null"]
+        direction:
+          description: "`UP` or `DOWN`."
+          type: [string, "null"]
+        internalName:
+          description: BMTC's own depot-code name for the direction, e.g. `KMT-NDV`.
+          type: [string, "null"]
+        isAirportRoute: { type: boolean }
+        isFreeRide: { type: boolean }
+        isPremiumBusRoute: { type: boolean }
+        mTicketEnabled: { type: boolean }
+        owners:
+          description: Systems the route's data comes from, e.g. `app`, `etim`.
+          items: { type: string }
+          type: [array, "null"]
+        polyline:
+          type: [string, "null"]
+        reverse_routeId:
+          description: Route id of the opposite direction; empty when there is none.
+          type: [string, "null"]
+        routePassEnabled: { type: boolean }
+        route_id:
+          type: [string, "null"]
+        route_name:
+          type: [string, "null"]
+        shortTripEnabled: { type: boolean }
+        spf:
+          description: Service classes the route runs; see `BmtcServiceClass`.
+          items: { $ref: "#/components/schemas/BmtcServiceClass" }
+          type: [array, "null"]
+        station_type:
+          description: >-
+            Uppercase `ChaloTransitMode` name; see `StopApiModel.station_type`.
+          type: [string, "null"]
+        stopPassEnabled: { type: boolean }
+        stopSequenceWithDetails:
+          items: { $ref: "#/components/schemas/StopApiModel" }
+          type: [array, "null"]
+        ticketingAllowed: { type: boolean }
+        totalDistance:
+          description: Route length in metres.
+          type: [integer, "null"]
+        transport_type:
+          description: >-
+            Lowercase `ChaloTransitMode` value; see `RouteDetailOldApiModel.transport_type`.
+          type: [string, "null"]
+        ttSid: { type: integer }
+        ttStatus:
+          {
+            description: Timetable status; see `RouteStaticDataApiModel.ttStatus`.,
+            type: integer,
+          }
+        tt_type:
           type: [integer, "null"]
       type: object
     RouteLegacySpecialFeature:
@@ -11829,7 +12089,8 @@ components:
             polls `/seat/availability`.
           type: [integer, "null"]
         specialFeatures:
-          items: { type: string }
+          description: Alternate wire name for `spf`; see `BmtcServiceClass`.
+          items: { $ref: "#/components/schemas/BmtcServiceClass" }
           type: [array, "null"]
         stationType:
           description: >-
@@ -12000,7 +12261,8 @@ components:
           items: { $ref: "#/components/schemas/RouteLegacySpecialFeature" }
           type: [array, "null"]
         spf:
-          items: { type: string }
+          description: Service classes the route runs; see `BmtcServiceClass`.
+          items: { $ref: "#/components/schemas/BmtcServiceClass" }
           type: [array, "null"]
         station_type:
           description: >-
@@ -12823,10 +13085,12 @@ components:
         route_name:
           type: [string, "null"]
         special_features:
-          items: { type: string }
+          description: Alternate wire name for `spf`; see `BmtcServiceClass`.
+          items: { $ref: "#/components/schemas/BmtcServiceClass" }
           type: [array, "null"]
         spf:
-          items: { type: string }
+          description: Service classes the route runs; see `BmtcServiceClass`.
+          items: { $ref: "#/components/schemas/BmtcServiceClass" }
           type: [array, "null"]
         transport_type:
           {
@@ -12964,7 +13228,8 @@ components:
         route_name:
           type: [string, "null"]
         special_features:
-          items: { type: string }
+          description: Alternate wire name for `spf`; see `BmtcServiceClass`.
+          items: { $ref: "#/components/schemas/BmtcServiceClass" }
           type: [array, "null"]
         start_place_name:
           type: [string, "null"]
